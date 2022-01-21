@@ -23,6 +23,7 @@ class Entry(BaseModel):
 
 
 class Result(BaseModel):
+    limit: int
     count: int
     data: List[Entry]
 
