@@ -28,11 +28,12 @@ class Result(BaseModel):
 
 
 @app.get("/lookup", response_model=Result)
-async def lookup(prefix: str = "", asn: int = -1, nic: str = "", exact: bool = False, limit: int = 0, date: str = ""):
+async def lookup(prefix: str = "", asn: int = -1, nic: str = "", exact: bool = False, limit: int = 100, date: str = ""):
+
     res = supabase.rpc(
         'query_history',
         {'prefix': prefix, 'asn': asn, "nic": nic, "exact": exact, "res_limit": limit, "date": date}
     )
     data = res.json()
     length = len(data)
-    return {"count": length, "data": res.json()}
+    return {"limit": limit, "count": length, "data": res.json()}
