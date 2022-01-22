@@ -12,7 +12,32 @@ url: str = os.environ.get("SUPABASE_URL")
 key: str = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(url, key)
 
-app = FastAPI()
+description = """
+BGPKIT RPKI ROAs API provides lookup service for historical RPKI ROAs mapping
+with daily granularity.
+
+### Data Source
+
+The API is built with RIPE's daily RPKI ROAs dumps available at <https://ftp.ripe.net/rpki/>.
+
+### API Endpoints
+
+There is one endpoint for this API (`/lookup`). See the endpoint documentation below for details.
+"""
+
+app = FastAPI(
+    title="BGPKIT RPKI ROAs History Lookup",
+    description=description,
+    version="0.0.1",
+    terms_of_service="https://bgpkit.com/aua",
+    contact={
+        "name": "BGPKIT Data",
+        "url": "https://bgpkit.com",
+        "email": "data@bgpkit.com"
+    },
+    docs_url=None,
+    redoc_url="/docs",
+)
 
 
 class Entry(BaseModel):
@@ -28,8 +53,45 @@ class Result(BaseModel):
     data: List[Entry]
 
 
-@app.get("/lookup", response_model=Result)
-async def lookup(prefix: str = "", asn: int = -1, nic: str = "", exact: bool = False, limit: int = 100, date: str = ""):
+@app.get(
+    "/lookup",
+    response_model=Result,
+    response_description="The found ROA entry",
+)
+async def lookup(prefix: str = "", exact: bool = False, asn: int = -1, nic: str = "", date: str = "", limit: int = 100):
+    """
+    The `/lookup` endpoint has the following available parameters:
+    - `prefix`: IP prefix to search ROAs for, e.g. `?prefix=1.1.1.0/24`
+        - `exact`: whether to search only the exact prefix. By default, this parameter is `false` and the api searches for
+        both the prefix and its sub-prefixes. Example: `?prefix=8.8.8.0/24&exact=true`
+    - `asn`: Autonomous System Number to search ROAs for, e.g. `?asn=15169`
+    - `nic`: network information centre names, available ones: `apnic`, `afrinic`, `lacnic`, `ripencc`, `arin`
+    - `date`: limit the date of the ROAs, format: `YYYY-MM-DD`, e.g. `?date=2022-01-01`
+    - `limit`: limit the number of entries returns from the API. Default is `100`, and the backend support maximum of `10000` as the limit.
+        - the maximum number of entries per ASN is around 4000.
+
+    The API returns a list of ROA history entries, each has the following fields:
+    - `prefix`: IP prefix.
+    - `asn`: Autonomous System Number.
+    - `nic`: Network information centre name.
+    - `date_ranges`: The date ranges for which the ROA was present, formatted as an array of strings `[YYYY-MM-DD,YYYY-MM-DD)`
+        - the first date is the beginning of the range (inclusive) and the second date is the end of the range (exclusive).
+
+    Example data entry:
+    ```
+    {
+      "nic": "arin",
+      "prefix": "8.8.4.0/24",
+      "asn": 15169,
+      "date_ranges": [
+        "[2021-02-09,2022-01-23)"
+      ]
+    }
+    ```
+    This entry can be interpreted as:
+    The prefix `8.8.4.0/24` is registered by AS `15169` in `ARIN`, and the
+    registration is valid starting from `2021-02-09` to `2022-01-23` (exclusive).
+    """
 
     res = supabase.rpc(
         'query_history',
