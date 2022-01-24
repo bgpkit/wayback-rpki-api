@@ -1,4 +1,5 @@
 import os
+import datetime
 from typing import List, Optional
 
 from dotenv import load_dotenv
@@ -44,9 +45,9 @@ app = FastAPI(
 class Entry(BaseModel):
     nic: str
     prefix: str
-    max_len_prefix: str
+    max_len: int
     asn: int
-    date_ranges: List[str]
+    date_ranges: List[List[str]]
 
 
 class Result(BaseModel):
@@ -60,7 +61,7 @@ class Result(BaseModel):
     response_model=Result,
     response_description="The found ROA entry",
 )
-async def lookup(prefix: str = "", asn: int = -1, nic: str = "", date: str = "", limit: int = 100):
+async def lookup(prefix: str = "", asn: int = -1, nic: str = "", date: str = "", max_len: int = -1, limit: int = 100):
     """
     The `/lookup` endpoint has the following available parameters:
     - `prefix`: IP prefix to search ROAs for, e.g. `?prefix=1.1.1.0/24`
@@ -70,6 +71,7 @@ async def lookup(prefix: str = "", asn: int = -1, nic: str = "", date: str = "",
     - `asn`: Autonomous System Number to search ROAs for, e.g. `?asn=15169`
     - `nic`: network information centre names, available ones: `apnic`, `afrinic`, `lacnic`, `ripencc`, `arin`
     - `date`: limit the date of the ROAs, format: `YYYY-MM-DD`, e.g. `?date=2022-01-01`
+    - `max_len`: filter results by the max_len value, e.g. `?max_len=24`
     - `limit`: limit the number of entries returns from the API. Default is `100`, and the backend support maximum of `10000` as the limit.
         - the maximum number of entries per ASN is around 4000.
 
@@ -77,8 +79,9 @@ async def lookup(prefix: str = "", asn: int = -1, nic: str = "", date: str = "",
     - `prefix`: IP prefix.
     - `asn`: Autonomous System Number.
     - `nic`: Network information centre name.
-    - `date_ranges`: The date ranges for which the ROA was present, formatted as an array of strings `[YYYY-MM-DD,YYYY-MM-DD)`
-        - the first date is the beginning of the range (inclusive) and the second date is the end of the range (exclusive).
+    - `date_ranges`: The date ranges for which the ROA was present, formatted as an array of two-value string arrays`[[YYYY-MM-DD,YYYY-MM-DD]]`
+        - the first date is the beginning of the range (inclusive) and the second date is the end of the range (inclusive).
+        - it represents the dates that this ROA entry is present on the RPKI repository.
 
     Example data entry:
     ```
@@ -89,10 +92,13 @@ async def lookup(prefix: str = "", asn: int = -1, nic: str = "", date: str = "",
         {
           "nic": "arin",
           "prefix": "8.8.8.0/24",
-          "max_len_prefix": "8.8.8.0/24",
+          "max_len": 24,
           "asn": 15169,
           "date_ranges": [
-            "[2021-02-09,2022-01-24)"
+            [
+              "2021-02-09",
+              "2022-01-24"
+            ]
           ]
         }
       ]
@@ -103,13 +109,41 @@ async def lookup(prefix: str = "", asn: int = -1, nic: str = "", date: str = "",
     registration is valid starting from `2021-02-09` to `2022-01-24` (exclusive).
     """
 
+    print("test")
     res = supabase.rpc(
         'query_history',
-        {'prefix': prefix, 'asn': asn, "nic": nic, "res_limit": limit, "date": date}
+        {'prefix': prefix, 'asn': asn, "nic": nic, "res_limit": limit, "date": date, 'max_len': max_len}
     )
     data = res.json()
+    new_data = []
+    for entry in data:
+        max_p = entry.pop('max_len_prefix')
+        entry['max_len'] = max_p.split("/")[1]
+        ranges = entry.pop('date_ranges')
+        new_ranges = []
+        for date_range in ranges:
+            new_ranges.append(range_to_array(date_range))
+        entry['date_ranges'] = new_ranges
+
+        new_data.append(entry)
+
     length = len(data)
-    return {"limit": limit, "count": length, "data": res.json()}
+    return {"limit": limit, "count": length, "data": new_data}
+
+
+def range_to_array(date_range: str):
+    start_exclusive = False
+    end_exclusive = False
+    if date_range[0] == '(':
+        start_exclusive = True
+    if date_range[-1] == ')':
+        end_exclusive = True
+    start, end = date_range.lstrip("[(").rstrip("])").split(",")
+    if start_exclusive:
+        start = (datetime.datetime.strptime(start, '%Y-%M-%d') + datetime.timedelta(days=1)).strftime('%Y-%M-%d')
+    if end_exclusive:
+        end = (datetime.datetime.strptime(end, '%Y-%M-%d') - datetime.timedelta(days=1)).strftime('%Y-%M-%d')
+    return [start, end]
 
 
 @app.get("/")
