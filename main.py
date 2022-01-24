@@ -3,6 +3,7 @@ from typing import List, Optional
 
 from dotenv import load_dotenv
 from pydantic import BaseModel
+from starlette.responses import RedirectResponse
 from supabase import create_client, Client
 from fastapi import FastAPI
 
@@ -43,6 +44,7 @@ app = FastAPI(
 class Entry(BaseModel):
     nic: str
     prefix: str
+    max_len_prefix: str
     asn: int
     date_ranges: List[str]
 
@@ -58,12 +60,13 @@ class Result(BaseModel):
     response_model=Result,
     response_description="The found ROA entry",
 )
-async def lookup(prefix: str = "", exact: bool = False, asn: int = -1, nic: str = "", date: str = "", limit: int = 100):
+async def lookup(prefix: str = "", asn: int = -1, nic: str = "", date: str = "", limit: int = 100):
     """
     The `/lookup` endpoint has the following available parameters:
     - `prefix`: IP prefix to search ROAs for, e.g. `?prefix=1.1.1.0/24`
-        - `exact`: whether to search only the exact prefix. By default, this parameter is `false` and the api searches for
-        both the prefix and its sub-prefixes. Example: `?prefix=8.8.8.0/24&exact=true`
+        - **NOTE**: only valid prefix match will be returned, i.e. the prefix must be contained within (or equals to) a
+        prefix of a ROA entry and the length of the prefix must be equal or smaller than the max_length specified by the
+        ROA.
     - `asn`: Autonomous System Number to search ROAs for, e.g. `?asn=15169`
     - `nic`: network information centre names, available ones: `apnic`, `afrinic`, `lacnic`, `ripencc`, `arin`
     - `date`: limit the date of the ROAs, format: `YYYY-MM-DD`, e.g. `?date=2022-01-01`
@@ -80,23 +83,38 @@ async def lookup(prefix: str = "", exact: bool = False, asn: int = -1, nic: str 
     Example data entry:
     ```
     {
-      "nic": "arin",
-      "prefix": "8.8.4.0/24",
-      "asn": 15169,
-      "date_ranges": [
-        "[2021-02-09,2022-01-23)"
+      "limit": 100,
+      "count": 1,
+      "data": [
+        {
+          "nic": "arin",
+          "prefix": "8.8.8.0/24",
+          "max_len_prefix": "8.8.8.0/24",
+          "asn": 15169,
+          "date_ranges": [
+            "[2021-02-09,2022-01-24)"
+          ]
+        }
       ]
     }
     ```
     This entry can be interpreted as:
-    The prefix `8.8.4.0/24` is registered by AS `15169` in `ARIN`, and the
-    registration is valid starting from `2021-02-09` to `2022-01-23` (exclusive).
+    The prefix `8.8.8.0/24` is registered by AS `15169` in `ARIN`, and the
+    registration is valid starting from `2021-02-09` to `2022-01-24` (exclusive).
     """
 
     res = supabase.rpc(
         'query_history',
-        {'prefix': prefix, 'asn': asn, "nic": nic, "exact": exact, "res_limit": limit, "date": date}
+        {'prefix': prefix, 'asn': asn, "nic": nic, "res_limit": limit, "date": date}
     )
     data = res.json()
     length = len(data)
     return {"limit": limit, "count": length, "data": res.json()}
+
+
+@app.get("/")
+async def root_redirect_to_docs():
+    """
+    Redirect access to `/` to `/docs`.
+    """
+    return RedirectResponse("/docs")
