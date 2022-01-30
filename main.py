@@ -6,8 +6,11 @@ from typing import List, Optional
 from dotenv import load_dotenv
 from pydantic import BaseModel
 from starlette.requests import Request
+from starlette.responses import Response
 from supabase import create_client, Client
 from fastapi import FastAPI
+
+from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
@@ -61,6 +64,13 @@ app = FastAPI(
     redoc_url="/docs",
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 class Entry(BaseModel):
     tal: str
@@ -73,16 +83,13 @@ class Entry(BaseModel):
 class Result(BaseModel):
     limit: int
     count: int
+    next_page_num: Optional[int]
     next_page: Optional[str]
     error: Optional[str]
     data: List[Entry]
 
 
-@app.get(
-    "/lookup",
-    response_model=Result,
-    response_description="The found ROA entry",
-)
+@app.get( "/lookup", response_model=Result, response_description="The found ROA entry", )
 async def lookup(request: Request, prefix: str = "", asn: int = -1, tal: str = "", date: str = "", max_len: int = -1,
                  limit: int = 100,
                  page: int = 1, pretty: bool = False):
@@ -111,8 +118,8 @@ async def lookup(request: Request, prefix: str = "", asn: int = -1, tal: str = "
         - default: 100
         - maximum: 10000
     - `count`: the number of entries returned from the API call
-    - `next_page`: the API URL for accessing the next page of the entries
-        - e.g if the current `page` is 1, then the `next_page` URL will point to page 2.
+    - `next_page_num`: the next page number
+    - `next_page`: the **API URL** for accessing the next page of the entries
     - `data`: the content of the lookup results
 
     The `data` field contains a number of ROA history entries, each has the following fields:
@@ -157,8 +164,9 @@ async def lookup(request: Request, prefix: str = "", asn: int = -1, tal: str = "
 
     # parameter validations
     if page < 1:
-        return {"limit": limit, "count": 0, "next_page": None, "data": [],
-                "error": "parameters validation failed: page>=1"}
+        res = {"limit": limit, "count": 0, "next_page": None, "next_page_num": None, "data": [],
+               "error": "parameters validation failed: page>=1"}
+        return Response(json.dumps(res), media_type="application/json", status_code=400)
     offset = (page-1) * limit
 
     res = supabase.rpc(
@@ -167,6 +175,12 @@ async def lookup(request: Request, prefix: str = "", asn: int = -1, tal: str = "
          "res_offset": offset}
     )
     data = res.json()
+
+    # check for error
+    if 'message' in data:
+        res = {"limit": limit, "count": 0, "next_page": None, "next_page_num": None, "data": [], "error": data['message']}
+        return Response(json.dumps(res), media_type="application/json", status_code=400)
+
     new_data = []
     for entry in data:
         # update max_len
@@ -188,6 +202,7 @@ async def lookup(request: Request, prefix: str = "", asn: int = -1, tal: str = "
     length = len(data)
 
     new_url = None
+    next_page_num = None
     if length >= limit:
         new_url = BASEURL.rstrip("/") + "/lookup?"
         params = []
@@ -205,9 +220,10 @@ async def lookup(request: Request, prefix: str = "", asn: int = -1, tal: str = "
             params.append(f"max_len={max_len}")
         if page > 0:
             params.append(f"page={page+1}")
+            next_page_num = page + 1
         new_url += "&".join(params)
 
-    res = {"limit": limit, "count": length, "next_page": new_url, "data": new_data, "error": None}
+    res = {"limit": limit, "count": length, "next_page_num": next_page_num, "next_page": new_url, "data": new_data, "error": None}
     if pretty:
         data_res = json.dumps(res, indent=4)
     else:
