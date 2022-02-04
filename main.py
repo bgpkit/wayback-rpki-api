@@ -25,18 +25,21 @@ description = """
 *BGPKIT RPKI ROAs API provides lookup service for historical RPKI ROAs mapping
 with daily granularity.*
 
-### Data Update Frequency
+### Data Update Frequency and Limitation
 
 The backend fetches the recent RPKI ROAs data every 2 hours.
 
-### API Terms of Use
+### Data Limitation and API Terms of Use
+
+The source data may contain missing content in certain dates, this API should be treated as informational only and use 
+with caution.
 
 This data API is provided as a public API. If using this data, you need to agree with the BGPKIT LLC's 
 Acceptable Use Agreement for public data APIs: https://bgpkit.com/aua
 
 ### Data Source and Attribution
 
-The API is built using RIPE NCC's daily RPKI ROAs dumps available at https://ftp.ripe.net/rpki/. 
+The API is built using RIPE NCC's daily RPKI ROAs (VRP) dumps available at https://ftp.ripe.net/rpki/. 
 If using this data, please attribute the original source.
 
 <img src="https://www.ripe.net/about-us/press-centre/ripe-ncc-logos/ripe-ncc-logo-png" alt="drawing" width="200"/>
@@ -89,13 +92,43 @@ class Result(BaseModel):
     data: List[Entry]
 
 
-@app.get( "/lookup", response_model=Result, response_description="The found ROA entry", )
+class FileEntry(BaseModel):
+    url: str
+    tal: str
+    file_date: str
+    rows_count: int
+
+
+class FilesResult(BaseModel):
+    count: int
+    data: List[FileEntry]
+
+
+@app.get("/files", response_model=FilesResult, include_in_schema=False)
+async def files(request: Request, tal: str = "", pretty: bool = False):
+    """
+    ### Files Lookup Query
+    """
+    res = supabase.rpc(
+        'query_file',
+        {'tal': tal}
+    )
+    data = res.json()
+    res = {"count": len(data), "data": data}
+    if pretty:
+        data_res = json.dumps(res, indent=4)
+    else:
+        data_res = json.dumps(res)
+
+    return Response(data_res, media_type="application/json")
+
+
+@app.get("/lookup", response_model=Result, response_description="The found ROA entry", )
 async def lookup(request: Request, prefix: str = "", asn: int = -1, tal: str = "", date: str = "", max_len: int = -1,
                  limit: int = 100,
                  page: int = 1, pretty: bool = False):
     """
-
-    ### Query
+    ### ROAs Lookup Query
 
     The `/lookup` endpoint has the following available parameters:
     - `prefix`: IP prefix to search ROAs for, e.g. `?prefix=1.1.1.0/24`
@@ -167,10 +200,10 @@ async def lookup(request: Request, prefix: str = "", asn: int = -1, tal: str = "
         res = {"limit": limit, "count": 0, "next_page": None, "next_page_num": None, "data": [],
                "error": "parameters validation failed: page>=1"}
         return Response(json.dumps(res), media_type="application/json", status_code=400)
-    offset = (page-1) * limit
+    offset = (page - 1) * limit
 
     res = supabase.rpc(
-        'query_history',
+        'query_history_2',
         {'prefix': prefix, 'asn': asn, "nic": tal, "res_limit": limit, "date": date, 'max_len': max_len,
          "res_offset": offset}
     )
@@ -178,14 +211,12 @@ async def lookup(request: Request, prefix: str = "", asn: int = -1, tal: str = "
 
     # check for error
     if 'message' in data:
-        res = {"limit": limit, "count": 0, "next_page": None, "next_page_num": None, "data": [], "error": data['message']}
+        res = {"limit": limit, "count": 0, "next_page": None, "next_page_num": None, "data": [],
+               "error": data['message']}
         return Response(json.dumps(res), media_type="application/json", status_code=400)
 
     new_data = []
     for entry in data:
-        # update max_len
-        max_p = entry.pop('max_len_prefix')
-        entry['max_len'] = max_p.split("/")[1]
 
         # update ranges
         ranges = entry.pop('date_ranges')
@@ -193,9 +224,6 @@ async def lookup(request: Request, prefix: str = "", asn: int = -1, tal: str = "
         for date_range in ranges:
             new_ranges.append(range_to_array(date_range))
         entry['date_ranges'] = new_ranges
-
-        # rename nic to tal
-        entry['tal'] = entry.pop('nic')
 
         new_data.append(entry)
 
@@ -219,11 +247,12 @@ async def lookup(request: Request, prefix: str = "", asn: int = -1, tal: str = "
         if max_len >= 0:
             params.append(f"max_len={max_len}")
         if page > 0:
-            params.append(f"page={page+1}")
+            params.append(f"page={page + 1}")
             next_page_num = page + 1
         new_url += "&".join(params)
 
-    res = {"limit": limit, "count": length, "next_page_num": next_page_num, "next_page": new_url, "data": new_data, "error": None}
+    res = {"limit": limit, "count": length, "next_page_num": next_page_num, "next_page": new_url, "data": new_data,
+           "error": None}
     if pretty:
         data_res = json.dumps(res, indent=4)
     else:
