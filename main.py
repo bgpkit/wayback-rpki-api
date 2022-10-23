@@ -46,8 +46,7 @@ If using this data, please attribute the original source.
 
 ### About BGPKIT
 
-BGPKIT LLC is a software consulting company that specializes on BGP data analysis (<https://bgpkit.com>). We develop and
-maintain a number of open-source BGP data analysis tools, available at GitHub (<https://github.com/bgpkit>). 
+BGPKIT team develops and maintains a number of open-source BGP data analysis tools, available at GitHub (<https://github.com/bgpkit>). 
 
 If you find this data adds value to your workflow and would like to support our long-term development and 
 maintenance of the software and data APIs, please consider sponsor us on GitHub at <https://github.com/sponsors/bgpkit>.
